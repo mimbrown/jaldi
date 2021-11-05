@@ -1,0 +1,5 @@
+{
+  "imports": {
+    "vue": "https://cdn.skypack.dev/vue@3.2.20?dts"
+  }
+}
