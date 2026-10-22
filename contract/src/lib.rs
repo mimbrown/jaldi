@@ -15,10 +15,11 @@
 //! # What the tool writes
 //!
 //! Into `Manifest::out_dir`, named by the entry's id, which is one path
-//! segment: `{id}.js` for an enhancement, `{id}.css` for a sheet, the
-//! same with `.map` when the manifest asks for source maps, and
-//! `{id}.json` holding the entry's [`Produced`] record. A framework reads
-//! nothing else, and commits all of it beside the sources.
+//! segment: `{id}.js` for an enhancement or a module, `{id}.css` for a
+//! sheet, the same with `.map` when the manifest asks for source maps,
+//! and `{id}.json` holding the entry's [`Produced`] record. Declarations
+//! write nothing. A framework reads nothing else, and commits all of it
+//! beside the sources.
 
 use std::fmt;
 use std::path::PathBuf;
@@ -27,7 +28,7 @@ use serde::{Deserialize, Serialize};
 
 /// The contract this crate describes. Equal on both sides or refused;
 /// any difference is a refusal.
-pub const CONTRACT: u32 = 2;
+pub const CONTRACT: u32 = 3;
 
 // ---------------------------------------------------------------- in
 
@@ -112,6 +113,37 @@ pub enum Kind {
         /// The generated `{name}.parts.d.ts`, relative to `root`.
         header: PathBuf,
     },
+    /// A TypeScript module of a program the framework owns outright (its
+    /// client runtime): no header, importing its siblings. Every module
+    /// of a manifest is checked in one program with its enhancements and
+    /// declarations, under the same regime, then erased one-to-one with
+    /// its imports as written, to `{id}.js`.
+    ///
+    /// Because every output sits in `out_dir` as `{id}.js`, an import is
+    /// held to that layout so the outputs resolve exactly as the sources
+    /// did: a relative import names another module of the manifest as
+    /// `./{id}.js` (its source the sibling that specifier resolves to),
+    /// and a bare specifier is one a [`Kind::Declarations`] entry
+    /// declares. Anything else — a path outside `root`, a file that is no
+    /// entry, a sibling under another id — is a diagnostic at the import.
+    /// A dynamic `import()` of a computed specifier is the runtime's own
+    /// business and is not followed.
+    ///
+    /// The modules are one program, so they are produced together or not
+    /// at all: an error in any of them writes none of them.
+    Module {
+        /// Relative to `root`.
+        source: PathBuf,
+    },
+    /// Ambient declarations the program is checked against, and nothing
+    /// more: a `.d.ts` typing a module served as built (a vendored
+    /// bundle) that a [`Kind::Module`] imports by a bare specifier the
+    /// framework resolves at run time (`declare module "vendor/x" { … }`).
+    /// Checked, never written, and absent from the answer's records.
+    Declarations {
+        /// Relative to `root`.
+        source: PathBuf,
+    },
     /// A stylesheet, composed by the framework. Lowered to the browser
     /// floor and minified; its rules come back as data for the
     /// framework's own checks.
@@ -170,7 +202,9 @@ pub struct Output {
 pub struct Produced {
     pub id: EntryId,
     /// SHA-256, hex, of everything the lowering read: for an enhancement
-    /// the source then the header, concatenated; for a sheet its text.
+    /// the source then the header, concatenated; for a module its source
+    /// alone (erasure is per file; the program it was checked in is the
+    /// framework's to keep whole); for a sheet its text.
     /// The framework computes the same ([`input_hash`]) to know when the
     /// output is behind.
     pub input_hash: Hash,
@@ -264,7 +298,8 @@ pub struct Position {
 // ---------------------------------------------------------------- wire
 
 /// The hash a [`Produced::input_hash`] holds, over the inputs in order:
-/// an enhancement's source then its header; a sheet's text alone.
+/// an enhancement's source then its header; a module's source alone; a
+/// sheet's text alone.
 pub fn input_hash(inputs: &[&[u8]]) -> Hash {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
@@ -436,6 +471,28 @@ mod tests {
                     },
                 },
                 Entry {
+                    id: EntryId("navigation".into()),
+                    origin: Origin {
+                        krate: "framework".into(),
+                        file: "framework/framework/src/progressive.rs".into(),
+                        line: 30,
+                    },
+                    kind: Kind::Module {
+                        source: "framework/framework/static/runtime/navigation.ts".into(),
+                    },
+                },
+                Entry {
+                    id: EntryId("vendor".into()),
+                    origin: Origin {
+                        krate: "framework".into(),
+                        file: "framework/framework/src/progressive.rs".into(),
+                        line: 40,
+                    },
+                    kind: Kind::Declarations {
+                        source: "framework/framework/static/vendor/prosemirror.d.ts".into(),
+                    },
+                },
+                Entry {
                     id: EntryId("sheet".into()),
                     origin: Origin {
                         krate: "rubico-ats-base".into(),
@@ -517,6 +574,8 @@ mod tests {
     fn kinds_are_tagged_on_the_wire() {
         let json = manifest().to_json();
         assert!(json.contains("\"kind\": \"enhancement\""), "{json}");
+        assert!(json.contains("\"kind\": \"module\""), "{json}");
+        assert!(json.contains("\"kind\": \"declarations\""), "{json}");
         assert!(json.contains("\"text\": \"inline\""), "{json}");
         assert!(json.contains("\"crate\": \"rubico-ats-base\""), "{json}");
     }

@@ -9,6 +9,7 @@
 
 mod check;
 mod erase;
+mod imports;
 mod sheet;
 
 use std::collections::HashSet;
@@ -116,6 +117,8 @@ fn run(manifest: &Manifest) -> Result<Output, String> {
     let mut produced = Vec::new();
     let mut seen: HashSet<&EntryId> = HashSet::new();
     let mut enhancements: Vec<(&Entry, PathBuf, PathBuf, String, String)> = Vec::new();
+    let mut modules: Vec<(&Entry, PathBuf, String)> = Vec::new();
+    let mut declarations: Vec<(&Entry, PathBuf, String)> = Vec::new();
     let mut sheets: Vec<(&Entry, String, String, &[String])> = Vec::new();
 
     for entry in &manifest.entries {
@@ -151,6 +154,21 @@ fn run(manifest: &Manifest) -> Result<Output, String> {
                 };
                 enhancements.push((entry, source_path, header_path, text, header_text));
             }
+            Kind::Module { source } | Kind::Declarations { source } => {
+                let path = root.join(source);
+                let text = match std::fs::read_to_string(&path) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        diagnostics.push(error(entry, None, format!("cannot read the source {}: {e}", source.display())));
+                        continue;
+                    }
+                };
+                if matches!(entry.kind, Kind::Module { .. }) {
+                    modules.push((entry, path, text));
+                } else {
+                    declarations.push((entry, path, text));
+                }
+            }
             Kind::Sheet { source, tokens } => {
                 let (name, text) = match source {
                     Text::File { path } => match std::fs::read_to_string(root.join(path)) {
@@ -167,18 +185,26 @@ fn run(manifest: &Manifest) -> Result<Output, String> {
         }
     }
 
-    // The check, one program over every enhancement: the module against
-    // its header, its default export against the header's `Mount`.
+    // The check, one program over every enhancement, module and
+    // declaration file: an enhancement against its header, its default
+    // export against the header's `Mount`; a module against the modules
+    // it imports.
     let mut failed: HashSet<EntryId> = HashSet::new();
-    if !enhancements.is_empty() {
+    if !enhancements.is_empty() || !modules.is_empty() || !declarations.is_empty() {
         let checked: Vec<check::Checked> = enhancements
             .iter()
             .map(|(entry, source, header, _, _)| check::Checked {
                 id: entry.id.clone(),
                 origin: entry.origin.clone(),
                 source: source.clone(),
-                header: header.clone(),
+                header: Some(header.clone()),
             })
+            .chain(modules.iter().chain(&declarations).map(|(entry, source, _)| check::Checked {
+                id: entry.id.clone(),
+                origin: entry.origin.clone(),
+                source: source.clone(),
+                header: None,
+            }))
             .collect();
         for d in check::run(&checked) {
             if d.severity == Severity::Error
@@ -215,6 +241,61 @@ fn run(manifest: &Manifest) -> Result<Output, String> {
             None,
         )?;
         produced.push(record);
+    }
+
+    // The modules: their imports held to the output layout, then erased
+    // together. One program, so one outcome: an error in any module (or
+    // in a declaration file they are checked against, or a failure of the
+    // run itself) writes none of them.
+    if !modules.is_empty() {
+        let declared: HashSet<String> = declarations.iter().flat_map(|(_, _, text)| imports::declared(text)).collect();
+        let program: Vec<imports::Module> = modules
+            .iter()
+            .map(|(entry, source, text)| imports::Module {
+                id: &entry.id,
+                source,
+                text,
+            })
+            .collect();
+        for (i, (entry, _, _)) in modules.iter().enumerate() {
+            for (at, message) in imports::check(root, &program, i, &declared) {
+                failed.insert(entry.id.clone());
+                diagnostics.push(error(entry, Some(at), message));
+            }
+        }
+        let mut erased = Vec::new();
+        for (entry, source_path, text) in &modules {
+            if failed.contains(&entry.id) {
+                continue;
+            }
+            let name = source_path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            match erase::erase(text, &name, manifest.source_maps) {
+                Ok(e) => erased.push((entry, text, e)),
+                Err(problems) => {
+                    failed.insert(entry.id.clone());
+                    diagnostics.extend(problems.into_iter().map(|(at, message)| error(entry, at, message)));
+                }
+            }
+        }
+        let run_failed = diagnostics.iter().any(|d| d.severity == Severity::Error && d.entry.is_none());
+        let set_failed = run_failed || modules.iter().chain(&declarations).any(|(entry, _, _)| failed.contains(&entry.id));
+        if !set_failed {
+            for (entry, text, erased) in erased {
+                let record = write(
+                    &out_dir,
+                    entry,
+                    "js",
+                    erased.code.as_bytes(),
+                    erased.map.as_deref(),
+                    hash(text.as_bytes()),
+                    None,
+                )?;
+                produced.push(record);
+            }
+        }
     }
 
     for (entry, name, text, tokens) in &sheets {
