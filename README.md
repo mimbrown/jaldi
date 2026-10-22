@@ -16,7 +16,7 @@ run; jaldi mints nothing and has no configuration and no plugins.
 
 `contract/` is `jaldi-contract`, the one crate both sides compile against.
 It holds the manifest in (`Manifest`: entries by kind, each with the Rust
-declaration it came from, and the browser floor), the answer out
+declaration it came from), the answer out
 (`Answer`: outputs with content hashes, a sheet's rules as data, and
 diagnostics that point at the declaration), and the version (`CONTRACT`,
 one integer).

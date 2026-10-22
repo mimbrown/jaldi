@@ -6,7 +6,7 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use jaldi_contract::{Answer, Browsers, CONTRACT, Entry, EntryId, Kind, Manifest, Origin, Produced, Severity, Text, exit};
+use jaldi_contract::{Answer, CONTRACT, Entry, EntryId, Kind, Manifest, Origin, Produced, Severity, Text, exit};
 
 fn run(stdin: &str) -> (i32, String, String) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_jaldi"))
@@ -184,11 +184,6 @@ fn a_sheet_is_lowered_with_its_rules_as_data() {
                 content: "@layer base { :root { --gap: 1rem } .chip { gap: var(--gap); color: rgb(255 0 0 / 50%) } }".into(),
             },
             tokens: vec!["--gap".into()],
-            browsers: Browsers {
-                chrome: 150,
-                safari: 26,
-                firefox: 148,
-            },
         },
     };
     let (status, stdout, stderr) = run(&manifest(ws.path(), CONTRACT, vec![sheet]).to_json());
@@ -198,6 +193,8 @@ fn a_sheet_is_lowered_with_its_rules_as_data() {
     assert_eq!(facts.rules.len(), 2);
     assert_eq!(facts.rules[1].selector, ".chip");
     assert_eq!(facts.rules[1].layer.as_deref(), Some("base"));
+    assert_eq!(facts.rules[1].declarations[1].name, "color");
+    assert_eq!(facts.rules[1].declarations[1].value, "#ff000080"); // printed canonically
     let css = std::fs::read_to_string(ws.path().join("app/.jaldi/sheet.css")).unwrap();
     assert!(css.starts_with("@layer base{"), "{css}");
 }

@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 
 /// The contract this crate describes. Equal on both sides or refused;
 /// any difference is a refusal.
-pub const CONTRACT: u32 = 1;
+pub const CONTRACT: u32 = 2;
 
 // ---------------------------------------------------------------- in
 
@@ -46,14 +46,6 @@ pub struct Manifest {
     /// Whether to write a source map beside each output.
     pub source_maps: bool,
     pub entries: Vec<Entry>,
-}
-
-/// The oldest major version of each engine the output must run in.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
-pub struct Browsers {
-    pub chrome: u16,
-    pub safari: u16,
-    pub firefox: u16,
 }
 
 /// One unit of work. Its id is the framework's name for it and the key
@@ -129,9 +121,6 @@ pub enum Kind {
         /// read of a property neither here nor declared in the sheet is
         /// a diagnostic.
         tokens: Vec<String>,
-        /// The browser floor the sheet is lowered to. Demanded: a tool
-        /// that guessed would guess differently from the framework's docs.
-        browsers: Browsers,
     },
 }
 
@@ -203,21 +192,46 @@ pub struct SheetFacts {
     pub rules: Vec<Rule>,
 }
 
-/// One style rule of the lowered sheet, enough for a framework's checks
+/// One style rule of the sheet as written (read before minify, which
+/// rewrites values and merges rules), enough for a framework's checks
 /// that do not need the syntax tree: what it selects, in which layer, at
-/// what specificity, and which properties it sets. A rule with several
-/// selectors is one `Rule` per selector.
+/// what specificity, under what conditions, and what it declares. A rule
+/// with several selectors is one `Rule` per selector.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct Rule {
+    /// Resolved through nesting: a nested `&:hover` under `.a` is
+    /// `.a:hover`, and a nested `.b` with no `&` is `.a .b`.
     pub selector: String,
     /// The innermost `@layer` the rule sits in, dotted when nested.
     pub layer: Option<String>,
-    /// `(ids, classes, types)`.
+    /// `(ids, classes, types)` of the resolved selector: the parent's
+    /// accumulated down the nesting.
     pub specificity: (u32, u32, u32),
-    /// Property names as written, custom properties included.
-    pub properties: Vec<String>,
+    /// How many style rules enclose this one; `0` for a top-level rule.
+    pub depth: u32,
+    /// The conditional at-rules enclosing it, outermost first, as
+    /// preludes: `@media (width < 40rem)`, `@supports (…)`,
+    /// `@container …`, `@scope`, `@starting-style`. Empty when the rule
+    /// applies unconditionally.
+    pub conditions: Vec<String>,
+    /// In source order, custom properties included.
+    pub declarations: Vec<Declaration>,
     /// In the input text.
     pub at: Position,
+}
+
+/// One declaration of a [`Rule`].
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub struct Declaration {
+    /// The property as written: `margin`, `--gap`.
+    pub name: String,
+    /// The value as lightningcss prints it, unminified: `0`, `1rem`,
+    /// `rgb(255 0 0 / 50%)`.
+    pub value: String,
+    /// The longhands this declaration sets: itself when it is one, the
+    /// expansion when it is a shorthand (`margin` → the four sides).
+    pub longhands: Vec<String>,
+    pub important: bool,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
@@ -433,11 +447,6 @@ mod tests {
                             content: ":root{--gap:1rem}".into(),
                         },
                         tokens: vec!["--gap".into()],
-                        browsers: Browsers {
-                            chrome: 150,
-                            safari: 26,
-                            firefox: 148,
-                        },
                     },
                 },
             ],
@@ -453,7 +462,7 @@ mod tests {
     #[test]
     fn the_contract_leads_and_is_readable_alone() {
         let json = manifest().to_json();
-        assert!(json.trim_start().starts_with("{\n  \"contract\": 1,"), "{json}");
+        assert!(json.trim_start().starts_with(&format!("{{\n  \"contract\": {CONTRACT},")), "{json}");
         assert_eq!(manifest_version(&json).unwrap(), CONTRACT);
         // A manifest from a contract with fields this one has never seen
         // still yields its version.
@@ -465,11 +474,14 @@ mod tests {
     fn a_refusal_names_both_versions_and_reads_at_any_version() {
         let refused = Answer::Refused {
             contract: CONTRACT,
-            manifest: 2,
+            manifest: CONTRACT + 1,
             tool: "jaldi 0.1.0".into(),
         };
         let json = refused.to_json();
-        assert!(json.starts_with("{\n  \"kind\": \"refused\",\n  \"contract\": 1,"), "{json}");
+        assert!(
+            json.starts_with(&format!("{{\n  \"kind\": \"refused\",\n  \"contract\": {CONTRACT},")),
+            "{json}"
+        );
         assert_eq!(Answer::from_json(&json).unwrap(), refused);
         assert_eq!(refused.exit_status(), exit::REFUSED);
     }
