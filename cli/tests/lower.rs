@@ -225,3 +225,136 @@ fn an_id_with_a_separator_is_refused_per_entry() {
     let (_, diagnostics) = produced(&stdout);
     assert!(diagnostics[0].message.contains("one path segment"), "{diagnostics:?}");
 }
+
+// ------------------------------------------------------------ modules
+
+const WIRE: &str = "export const HEADER: string = 'x-progressive';\n\
+                    export function count(n: number): number { return n + 1; }\n";
+
+const MAIN: &str = "import { HEADER, count } from './wire.js';\n\
+                    import type { Doc } from 'vendor/pm';\n\
+                    export function install(d: Doc): void {\n\
+                    \x20 const n: number = count(1);\n\
+                    \x20 document.documentElement.setAttribute(HEADER, String(n + d.size));\n\
+                    }\n";
+
+const VENDOR: &str = "declare module 'vendor/pm' { export interface Doc { size: number } }\n";
+
+/// A runtime of two modules under `rt/` and a vendored module's
+/// declarations, beside the enhancement workspace.
+fn runtime(main: &str) -> tempfile::TempDir {
+    let ws = workspace(GOOD);
+    let rt = ws.path().join("app/rt");
+    std::fs::create_dir_all(&rt).unwrap();
+    std::fs::write(rt.join("wire.ts"), WIRE).unwrap();
+    std::fs::write(rt.join("main.ts"), main).unwrap();
+    std::fs::write(rt.join("vendor.d.ts"), VENDOR).unwrap();
+    ws
+}
+
+fn module(id: &str, source: &str) -> Entry {
+    Entry {
+        id: EntryId(id.into()),
+        origin: origin(),
+        kind: Kind::Module { source: source.into() },
+    }
+}
+
+fn runtime_entries() -> Vec<Entry> {
+    vec![
+        module("main", "app/rt/main.ts"),
+        module("wire", "app/rt/wire.ts"),
+        Entry {
+            id: EntryId("vendor".into()),
+            origin: origin(),
+            kind: Kind::Declarations {
+                source: "app/rt/vendor.d.ts".into(),
+            },
+        },
+    ]
+}
+
+#[test]
+fn modules_are_checked_as_one_program_and_erased_one_to_one() {
+    let ws = runtime(MAIN);
+    let (status, stdout, stderr) = run(&manifest(ws.path(), CONTRACT, runtime_entries()).to_json());
+    assert_eq!(status, exit::CLEAN, "{stdout}\n{stderr}");
+    let (produced, diagnostics) = produced(&stdout);
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    let ids: Vec<&str> = produced.iter().map(|p| p.id.0.as_str()).collect();
+    assert_eq!(ids, ["main", "wire"], "declarations write nothing");
+    let out = ws.path().join("app/.jaldi");
+    let main = std::fs::read_to_string(out.join("main.js")).unwrap();
+    assert!(main.contains("from \"./wire.js\""), "the import is kept as written: {main}");
+    assert!(!main.contains("vendor/pm") && !main.contains(": number"), "types erased: {main}");
+    assert!(!out.join("vendor.js").exists() && !out.join("vendor.json").exists());
+    // A module's record hashes its source alone.
+    let record = Produced::from_json(&std::fs::read_to_string(out.join("main.json")).unwrap()).unwrap();
+    assert_eq!(record.input_hash, jaldi_contract::input_hash(&[MAIN.as_bytes()]));
+    assert_eq!(record.output, Path::new("main.js"));
+}
+
+#[test]
+fn a_type_error_across_two_modules_is_positioned_in_the_importer_and_nothing_is_written() {
+    // `count` takes a number; the importer passes a string, on line 4.
+    let ws = runtime(&MAIN.replace("count(1)", "count('one')"));
+    let (status, stdout, _) = run(&manifest(ws.path(), CONTRACT, runtime_entries()).to_json());
+    assert_eq!(status, exit::ERRORS, "{stdout}");
+    let (produced, diagnostics) = produced(&stdout);
+    assert!(produced.is_empty(), "{produced:?}");
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    let d = &diagnostics[0];
+    assert_eq!(d.entry.as_ref().unwrap().0, "main");
+    assert_eq!(d.at.map(|p| (p.line, p.column)), Some((4, 27)), "{d:?}");
+    assert!(d.message.starts_with("TS2345:"), "{}", d.message);
+    // The sibling checked clean, and is not written either: one program, one outcome.
+    let out = ws.path().join("app/.jaldi");
+    assert!(!out.join("main.js").exists() && !out.join("wire.js").exists() && !out.join("wire.json").exists());
+}
+
+#[test]
+fn an_import_outside_root_is_refused_at_the_import_and_nothing_is_written() {
+    let ws = runtime(&format!("import '../../../outside.js';\n{MAIN}"));
+    let (status, stdout, _) = run(&manifest(ws.path(), CONTRACT, runtime_entries()).to_json());
+    assert_eq!(status, exit::ERRORS, "{stdout}");
+    let (produced, diagnostics) = produced(&stdout);
+    assert!(produced.is_empty(), "{produced:?}");
+    let d = diagnostics
+        .iter()
+        .find(|d| d.message.contains("outside the manifest's root"))
+        .unwrap_or_else(|| panic!("{diagnostics:?}"));
+    assert_eq!(d.entry.as_ref().unwrap().0, "main");
+    assert_eq!(d.at.map(|p| (p.line, p.column)), Some((1, 8)), "{d:?}");
+    assert!(!ws.path().join("app/.jaldi/wire.js").exists());
+}
+
+#[test]
+fn a_sibling_imported_under_another_name_than_its_id_is_named() {
+    let ws = runtime(MAIN);
+    let mut entries = runtime_entries();
+    entries[1].id = EntryId("protocol".into());
+    let (status, stdout, _) = run(&manifest(ws.path(), CONTRACT, entries).to_json());
+    assert_eq!(status, exit::ERRORS, "{stdout}");
+    let (_, diagnostics) = produced(&stdout);
+    assert!(
+        diagnostics.iter().any(|d| d.message.contains("imported as `./protocol.js`")),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn an_undeclared_bare_specifier_is_named() {
+    let ws = runtime(MAIN);
+    let mut entries = runtime_entries();
+    entries.pop();
+    let (status, stdout, _) = run(&manifest(ws.path(), CONTRACT, entries).to_json());
+    assert_eq!(status, exit::ERRORS, "{stdout}");
+    let (produced, diagnostics) = produced(&stdout);
+    assert!(produced.is_empty());
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.message.contains("no declarations entry of the manifest declares")),
+        "{diagnostics:?}"
+    );
+}

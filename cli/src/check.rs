@@ -1,7 +1,9 @@
 //! The TypeScript check, in process with tsrs (the Rust port of the
-//! TypeScript 7 compiler): every enhancement against its header, strict,
-//! erasable syntax only, and its default export pinned to the header's
-//! `Mount` by a probe module written beside a generated `tsconfig.json`.
+//! TypeScript 7 compiler): one program of every enhancement, module and
+//! declaration file of a manifest, strict, erasable syntax only; each
+//! enhancement against its header, its default export pinned to the
+//! header's `Mount` by a probe module written beside a generated
+//! `tsconfig.json`.
 //! The sources are read where they are; only the probes and the config
 //! are written, to a temporary directory removed afterwards.
 
@@ -22,8 +24,9 @@ pub struct Checked {
     pub origin: Origin,
     /// Absolute.
     pub source: PathBuf,
-    /// Absolute.
-    pub header: PathBuf,
+    /// Absolute. An enhancement's header, which a probe pins its default
+    /// export to; `None` for a module or a declaration file.
+    pub header: Option<PathBuf>,
 }
 
 /// The compiler options every enhancement is checked under. Fixed here,
@@ -57,8 +60,10 @@ fn run_in(dir: &Path, entries: &[Checked]) -> Vec<Diagnostic> {
     let mut files: Vec<String> = Vec::new();
     let mut probes: Vec<(String, &Checked)> = Vec::new();
     for entry in entries {
+        files.push(entry.source.to_string_lossy().into_owned());
+        let Some(header) = &entry.header else { continue };
         let module = entry.source.with_extension("js");
-        let header = entry.header.to_string_lossy().replace(".d.ts", ".js");
+        let header = header.to_string_lossy().replace(".d.ts", ".js");
         let probe = dir.join(format!("{}.check.ts", entry.id));
         let text = format!(
             "// Pins the default export of {} to the header's `Mount`.\n\
@@ -71,7 +76,6 @@ fn run_in(dir: &Path, entries: &[Checked]) -> Vec<Diagnostic> {
         if let Err(e) = std::fs::write(&probe, text) {
             return vec![run_problem(format!("cannot write {}: {e}", probe.display()))];
         }
-        files.push(entry.source.to_string_lossy().into_owned());
         let probe = probe.to_string_lossy().into_owned();
         files.push(probe.clone());
         probes.push((normalize(&probe), entry));
@@ -178,9 +182,9 @@ fn translate(d: &TsDiagnostic, entries: &[Checked], probes: &[(String, &Checked)
             origin: Some(entry.origin.clone()),
         };
     }
-    if let Some(entry) = entries.iter().find(|e| is(&e.header)) {
+    if let Some((entry, header)) = entries.iter().find_map(|e| e.header.as_ref().filter(|h| is(h)).map(|h| (e, h))) {
         let where_ = at.map(|p| format!(":{}:{}", p.line, p.column)).unwrap_or_default();
-        let message = format!("in the header {}{where_}: {message}", entry.header.display());
+        let message = format!("in the header {}{where_}: {message}", header.display());
         return Diagnostic {
             entry: Some(entry.id.clone()),
             severity,

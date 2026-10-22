@@ -33,10 +33,30 @@ a `[patch]` and the binary at a local build with an environment variable.
 ## What it writes
 
 Into the manifest's `out_dir`, named by each entry's id (one path
-segment): `{id}.js` for an enhancement, `{id}.css` for a sheet, the same
-with `.map` when source maps are asked for, and `{id}.json` holding the
-entry's `Produced` record with the input's hash. The framework commits all
-of it beside the sources and reads nothing else.
+segment): `{id}.js` for an enhancement or a module, `{id}.css` for a
+sheet, the same with `.map` when source maps are asked for, and
+`{id}.json` holding the entry's `Produced` record with the input's hash.
+A declarations entry writes nothing. The framework commits all of it
+beside the sources and reads nothing else.
+
+## The kinds
+
+- **enhancement**: a TypeScript module checked against its generated
+  header, its default export pinned to the header's `Mount`, then erased.
+- **module** (contract 3): a TypeScript module of a program the framework
+  owns outright, with no header, importing its siblings. Every module,
+  enhancement and declaration file of a manifest is checked as one
+  program under one regime (strict, erasable syntax only), then each
+  module is erased one-to-one with its imports as written. Since every
+  output is `{id}.js` in one directory, a relative import names another
+  module as `./{id}.js` and a bare specifier must be declared by a
+  declarations entry; anything else, a path outside `root` included, is a
+  diagnostic at the import. The modules are produced together or not at
+  all.
+- **declarations** (contract 3): a `.d.ts` of `declare module "…"` blocks
+  typing a module served as built (a vendored bundle) that a module
+  imports by a bare specifier. Checked, never written.
+- **sheet**: a stylesheet, lowered and minified, its rules back as data.
 
 ## Use
 
