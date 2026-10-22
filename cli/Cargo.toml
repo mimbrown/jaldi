@@ -12,7 +12,7 @@ name = "jaldi"
 path = "src/main.rs"
 
 [dependencies]
-jaldi-contract = { version = "0.1.0", path = "../contract" }
+jaldi-contract = { version = "0.2.0", path = "../contract" }
 serde_json = "1"
 sha2 = "0.10"
 # TypeScript erasure: the types removed and nothing else.
