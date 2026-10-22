@@ -3,36 +3,31 @@
 //!
 //! Both sides compile against this crate at one version. The tool refuses
 //! a manifest written against another contract ([`Answer::Refused`]),
-//! naming both versions, so drift is a launch error and never a silent
-//! one. Changing anything here is a contract change: bump [`CONTRACT`],
+//! naming both, so drift is a launch error and never a silent one.
+//! Changing anything here is a contract change: bump [`CONTRACT`],
 //! release the tool, bump the framework's pin.
 //!
-//! The wire is JSON, one object each way. The answer's first field is
-//! always `contract` and its second always `kind`, at every version, so a
-//! framework can read a refusal written by a tool it does not otherwise
-//! understand.
+//! The wire is JSON, one object each way. A manifest's first field is
+//! `contract`; an answer's first two are `kind` and `contract`, at every
+//! version, so a framework can read a refusal written by a tool it does
+//! not otherwise understand.
+//!
+//! # What the tool writes
+//!
+//! Into `Manifest::out_dir`, named by the entry's id, which is one path
+//! segment: `{id}.js` for an enhancement, `{id}.css` for a sheet, the
+//! same with `.map` when the manifest asks for source maps, and
+//! `{id}.json` holding the entry's [`Produced`] record. A framework reads
+//! nothing else, and commits all of it beside the sources.
 
 use std::fmt;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-/// The contract this crate describes. Equal on both sides or refused.
-pub const CONTRACT: Version = Version { major: 0, minor: 1 };
-
-/// A contract version. Any difference is a refusal for now; a rule that
-/// lets a newer tool take an older manifest is a later, deliberate change.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
-pub struct Version {
-    pub major: u16,
-    pub minor: u16,
-}
-
-impl fmt::Display for Version {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}.{}", self.major, self.minor)
-    }
-}
+/// The contract this crate describes. Equal on both sides or refused;
+/// any difference is a refusal.
+pub const CONTRACT: u32 = 1;
 
 // ---------------------------------------------------------------- in
 
@@ -41,14 +36,14 @@ impl fmt::Display for Version {
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct Manifest {
     /// The contract the manifest was written against. First field.
-    pub contract: Version,
+    pub contract: u32,
     /// The directory every relative path below resolves against: the
     /// framework's workspace root. Absolute.
     pub root: PathBuf,
     /// Where outputs go, relative to `root`. Committed beside the sources
     /// and verified by the framework's gate.
     pub out_dir: PathBuf,
-    /// The browser floor the lowering targets. Demanded: a tool that
+    /// The browser floor a sheet is lowered to. Demanded: a tool that
     /// guessed would guess differently from the framework's docs.
     pub browsers: Browsers,
     /// Whether to write a source map beside each output.
@@ -56,7 +51,7 @@ pub struct Manifest {
     pub entries: Vec<Entry>,
 }
 
-/// The oldest version of each engine the output must run in.
+/// The oldest major version of each engine the output must run in.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct Browsers {
     pub chrome: u16,
@@ -75,10 +70,33 @@ pub struct Entry {
     pub kind: Kind,
 }
 
-/// A framework-minted name, unique within one manifest (`chips`,
-/// `pattern/combobox`, `sheet`).
+/// A framework-minted name, unique within one manifest and one path
+/// segment (`chips`, `pattern-combobox`, `sheet`): it names the output
+/// files. The tool refuses an id with a separator or a leading dot.
 #[derive(Clone, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 pub struct EntryId(pub String);
+
+impl EntryId {
+    /// Why this id cannot name a file, if it cannot.
+    pub fn problem(&self) -> Option<&'static str> {
+        let s = &self.0;
+        if s.is_empty() {
+            Some("is empty")
+        } else if s.contains('/') || s.contains('\\') {
+            Some("contains a path separator; an id is one path segment")
+        } else if s.starts_with('.') {
+            Some("starts with a dot")
+        } else {
+            None
+        }
+    }
+}
+
+impl fmt::Display for EntryId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
 
 /// A Rust declaration site.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
@@ -90,53 +108,31 @@ pub struct Origin {
     pub line: u32,
 }
 
-/// What an entry is, and what its lowering needs.
+/// What an entry is, and what its lowering needs. Each kind is lowered
+/// one way; there is no verb to choose.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Kind {
-    /// A TypeScript module authored against a generated header
-    /// (`{name}.parts.d.ts`). Lowered by erasure — the types removed and
-    /// nothing else — after the check the entry asks for.
+    /// A TypeScript module authored against a generated header. Checked
+    /// by the TypeScript 7 checker (strict, erasable syntax only, the
+    /// module's default export pinned to the header's `Mount`), then
+    /// lowered by erasure: the types removed and nothing else.
     Enhancement {
         /// Relative to `root`.
         source: PathBuf,
-        /// The generated header, relative to `root`. Its `Mount` is what
-        /// the module's default export is pinned to.
+        /// The generated `{name}.parts.d.ts`, relative to `root`.
         header: PathBuf,
-        types: Types,
-    },
-    /// A JavaScript module as authored (the shim, a pattern, a vendored
-    /// module). Parsed, carried through, minified when `minify` says so.
-    Script {
-        /// Relative to `root`.
-        source: PathBuf,
-        minify: Minify,
     },
     /// A stylesheet, composed by the framework. Lowered to the browser
     /// floor and minified; its rules come back as data for the
     /// framework's own checks.
     Sheet {
         source: Text,
-        /// The custom properties the composition guarantees. A property
-        /// read that is not here is a diagnostic.
+        /// The custom properties the composition guarantees. A `var()`
+        /// read of a property neither here nor declared in the sheet is
+        /// a diagnostic.
         tokens: Vec<String>,
     },
-}
-
-/// Whether an enhancement is type-checked before erasure. Erasure alone
-/// still parses, so a syntax error is a diagnostic either way.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Types {
-    Checked,
-    Unchecked,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Minify {
-    Minified,
-    AsAuthored,
 }
 
 /// A text input: on disk, or already in memory (a sheet composed from
@@ -163,28 +159,24 @@ pub enum Answer {
     /// status says so too ([`exit`]).
     Produced(Output),
     /// The manifest's contract is not this tool's. Nothing was read past
-    /// the version, nothing was written. Its shape is frozen across
-    /// versions: `contract` (the tool's) and `kind` lead at every
-    /// version, and `manifest` names the version the manifest carried.
-    Refused {
-        contract: Version,
-        manifest: Version,
-        tool: String,
-    },
+    /// the version, nothing was written. Frozen across versions: `kind`
+    /// and `contract` (the tool's) lead, `manifest` is the version the
+    /// manifest carried, `tool` names the tool.
+    Refused { contract: u32, manifest: u32, tool: String },
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct Output {
     /// The tool's contract — the manifest's, since it was not refused.
-    pub contract: Version,
+    pub contract: u32,
     /// The tool's own version (`jaldi 0.1.0`), for the framework's pin check.
     pub tool: String,
     pub produced: Vec<Produced>,
     pub diagnostics: Vec<Diagnostic>,
 }
 
-/// What came of one entry. Absent from the list when the entry had an
-/// error diagnostic.
+/// What came of one entry. Absent from the list, and nothing written,
+/// when the entry had an error diagnostic.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct Produced {
     pub id: EntryId,
@@ -211,13 +203,16 @@ pub struct SheetFacts {
 
 /// One style rule of the lowered sheet, enough for a framework's checks
 /// that do not need the syntax tree: what it selects, in which layer, at
-/// what specificity, and which properties it sets.
+/// what specificity, and which properties it sets. A rule with several
+/// selectors is one `Rule` per selector.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct Rule {
     pub selector: String,
+    /// The innermost `@layer` the rule sits in, dotted when nested.
     pub layer: Option<String>,
     /// `(ids, classes, types)`.
     pub specificity: (u32, u32, u32),
+    /// Property names as written, custom properties included.
     pub properties: Vec<String>,
     /// In the input text.
     pub at: Position,
@@ -229,7 +224,8 @@ pub struct Diagnostic {
     pub entry: Option<EntryId>,
     pub severity: Severity,
     pub message: String,
-    /// In the entry's input text.
+    /// In the entry's input text (the source for an enhancement; a
+    /// problem in the header or the lib names the file in the message).
     pub at: Option<Position>,
     /// Copied from the entry, so a printer needs nothing but this.
     pub origin: Option<Origin>,
@@ -264,16 +260,14 @@ pub mod exit {
     pub const BROKEN: i32 = 3;
 }
 
-/// The manifest's version alone, read before anything else so a manifest
-/// from another contract is refused rather than misparsed.
 #[derive(Deserialize)]
 struct Leading {
-    contract: Version,
+    contract: u32,
 }
 
 /// The contract version a manifest carries, from its JSON, without
 /// reading the rest.
-pub fn manifest_version(json: &str) -> Result<Version, serde_json::Error> {
+pub fn manifest_version(json: &str) -> Result<u32, serde_json::Error> {
     serde_json::from_str::<Leading>(json).map(|l| l.contract)
 }
 
@@ -306,6 +300,16 @@ impl Answer {
     }
 }
 
+impl Produced {
+    pub fn to_json(&self) -> String {
+        serde_json::to_string_pretty(self).expect("a record serializes")
+    }
+
+    pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
+        serde_json::from_str(json)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -332,7 +336,6 @@ mod tests {
                     kind: Kind::Enhancement {
                         source: "rubico-ats/base/src/ui/chips.ts".into(),
                         header: "rubico-ats/base/src/ui/chips.parts.d.ts".into(),
-                        types: Types::Checked,
                     },
                 },
                 Entry {
@@ -362,23 +365,23 @@ mod tests {
     #[test]
     fn the_contract_leads_and_is_readable_alone() {
         let json = manifest().to_json();
-        assert!(json.trim_start().starts_with("{\n  \"contract\": {"), "{json}");
+        assert!(json.trim_start().starts_with("{\n  \"contract\": 1,"), "{json}");
         assert_eq!(manifest_version(&json).unwrap(), CONTRACT);
         // A manifest from a contract with fields this one has never seen
         // still yields its version.
-        let other = r#"{"contract":{"major":7,"minor":0},"something":"new"}"#;
-        assert_eq!(manifest_version(other).unwrap(), Version { major: 7, minor: 0 });
+        let other = r#"{"contract":7,"something":"new"}"#;
+        assert_eq!(manifest_version(other).unwrap(), 7);
     }
 
     #[test]
     fn a_refusal_names_both_versions_and_reads_at_any_version() {
         let refused = Answer::Refused {
             contract: CONTRACT,
-            manifest: Version { major: 0, minor: 2 },
+            manifest: 2,
             tool: "jaldi 0.1.0".into(),
         };
         let json = refused.to_json();
-        assert!(json.starts_with("{\n  \"kind\": \"refused\",\n  \"contract\": {"), "{json}");
+        assert!(json.starts_with("{\n  \"kind\": \"refused\",\n  \"contract\": 1,"), "{json}");
         assert_eq!(Answer::from_json(&json).unwrap(), refused);
         assert_eq!(refused.exit_status(), exit::REFUSED);
     }
@@ -414,8 +417,16 @@ mod tests {
     fn kinds_are_tagged_on_the_wire() {
         let json = manifest().to_json();
         assert!(json.contains("\"kind\": \"enhancement\""), "{json}");
-        assert!(json.contains("\"types\": \"checked\""), "{json}");
         assert!(json.contains("\"text\": \"inline\""), "{json}");
         assert!(json.contains("\"crate\": \"rubico-ats-base\""), "{json}");
+    }
+
+    #[test]
+    fn an_id_is_one_path_segment() {
+        assert_eq!(EntryId("chips".into()).problem(), None);
+        assert_eq!(EntryId("pattern-combobox".into()).problem(), None);
+        assert!(EntryId("pattern/combobox".into()).problem().is_some());
+        assert!(EntryId("".into()).problem().is_some());
+        assert!(EntryId(".hidden".into()).problem().is_some());
     }
 }

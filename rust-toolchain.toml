@@ -1,3 +1,5 @@
+# tsrs (the checker, a git dependency) builds on this version and pins it in its own workspace; jaldi pins the same
+# so the two never disagree. Moving it is a pull request of its own.
 [toolchain]
-channel = "stable"
+channel = "1.99.1"
 components = ["clippy", "rustfmt"]
