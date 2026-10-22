@@ -141,7 +141,7 @@ fn unbalanced(text: &str) -> Option<(Position, String)> {
         i += 1;
     }
     stack
-        .first()
+        .last()
         .map(|(o, at)| (crate::erase::position(text, *at), format!("`{o}` is never closed")))
 }
 
