@@ -1,0 +1,16 @@
+[package]
+name = "jaldi"
+description = "Lowers a framework's frontend — check, erase, minify, later bundle — behind a typed contract"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "jaldi"
+path = "src/main.rs"
+
+[dependencies]
+jaldi-contract = { version = "0.1.0", path = "../contract" }
+serde_json = "1"
