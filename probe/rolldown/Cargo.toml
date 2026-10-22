@@ -1,0 +1,21 @@
+[package]
+name = "jaldi-probe-rolldown"
+description = "Probe (#754): rolldown's crates as a library"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "jaldi_probe_rolldown"
+path = "src/lib.rs"
+
+[[bin]]
+name = "probe-rolldown"
+path = "src/main.rs"
+
+[dependencies]
+rolldown = "=1.2.15"
+tokio = { version = "1", features = ["rt"] }
+anyhow = "1"
+rolldown_common = "=1.2.15"

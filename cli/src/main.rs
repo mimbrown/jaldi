@@ -30,8 +30,33 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         ["lower", manifest] => lower(manifest),
+        // Probe (#754): `jaldi probe-bundle <entry> <out.js>`, minified, by whichever engine is compiled in.
+        #[cfg(any(feature = "probe-linker", feature = "probe-rolldown"))]
+        ["probe-bundle", entry, out] => probe_bundle(entry, out),
         _ => {
             eprintln!("usage:\n  jaldi version\n  jaldi lower <manifest.json | ->");
+            broken()
+        }
+    }
+}
+
+#[cfg(any(feature = "probe-linker", feature = "probe-rolldown"))]
+fn probe_bundle(entry: &str, out: &str) -> ExitCode {
+    let entry = Path::new(entry);
+    #[cfg(feature = "probe-linker")]
+    let code = jaldi_probe_linker::bundle(entry, jaldi_probe_linker::Mode::Minified);
+    #[cfg(all(feature = "probe-rolldown", not(feature = "probe-linker")))]
+    let code = match jaldi_probe_rolldown::bundle(entry, jaldi_probe_rolldown::Mode::Minified) {
+        Ok(code) => code,
+        Err(e) => {
+            eprintln!("jaldi: {e}");
+            return broken();
+        }
+    };
+    match std::fs::write(out, code) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("jaldi: {out}: {e}");
             broken()
         }
     }

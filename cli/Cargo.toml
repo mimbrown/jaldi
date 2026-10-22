@@ -28,5 +28,14 @@ tsrs_core = { git = "https://github.com/oxc-project/tsrs", rev = "cb5f848c51905f
 tsrs_scanner = { git = "https://github.com/oxc-project/tsrs", rev = "cb5f848c51905f1d22779db7e812e0578045ea1d" }
 tsrs_diagnostics = { git = "https://github.com/oxc-project/tsrs", rev = "cb5f848c51905f1d22779db7e812e0578045ea1d" }
 
+# Probe (#754), off by default: each engine as it would sit in the tool, so
+# `cargo build --features …` measures what it adds. Not for merging.
+jaldi-probe-linker = { path = "../probe/linker", optional = true }
+jaldi-probe-rolldown = { path = "../probe/rolldown", optional = true }
+
+[features]
+probe-linker = ["dep:jaldi-probe-linker"]
+probe-rolldown = ["dep:jaldi-probe-rolldown"]
+
 [dev-dependencies]
 tempfile = "3"

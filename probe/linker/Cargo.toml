@@ -1,0 +1,18 @@
+[package]
+name = "jaldi-probe-linker"
+description = "Probe (#754): a linker of our own over oxc — resolve, order, rename, strip export, minify"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "jaldi_probe_linker"
+path = "src/lib.rs"
+
+[[bin]]
+name = "probe-linker"
+path = "src/main.rs"
+
+[dependencies]
+oxc = { version = "0.155", features = ["semantic", "codegen", "minifier", "mangler"] }

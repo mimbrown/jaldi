@@ -1,0 +1,24 @@
+// Generated with the entry (probe): every pattern.
+import { patterns } from './registry.js';
+import combobox from './patterns/combobox.js';
+import dragPick from './patterns/drag-pick.js';
+import editor from './patterns/editor.js';
+import inlineEdit from './patterns/inline-edit.js';
+import inlineToggle from './patterns/inline-toggle.js';
+import listFilter from './patterns/list-filter.js';
+import preview from './patterns/preview.js';
+import rangeSlider from './patterns/range-slider.js';
+import reorder from './patterns/reorder.js';
+import selection from './patterns/selection.js';
+import templates from './patterns/templates.js';
+patterns.set('combobox', combobox);
+patterns.set('drag-pick', dragPick);
+patterns.set('editor', editor);
+patterns.set('inline-edit', inlineEdit);
+patterns.set('inline-toggle', inlineToggle);
+patterns.set('list-filter', listFilter);
+patterns.set('preview', preview);
+patterns.set('range-slider', rangeSlider);
+patterns.set('reorder', reorder);
+patterns.set('selection', selection);
+patterns.set('templates', templates);

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["contract", "cli"]
+members = ["contract", "cli", "probe/linker", "probe/rolldown"]
 
 [workspace.package]
 version = "0.3.0"
