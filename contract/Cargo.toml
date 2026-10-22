@@ -5,7 +5,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-rust-version.workspace = true
+# The crate a framework compiles: nothing past the edition's floor, so a
+# framework on an older stable than the tool's pin can still hold the
+# contract (the tool's own floor is the workspace's, tsrs's).
+rust-version = "1.85"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
