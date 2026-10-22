@@ -17,9 +17,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use jaldi_contract::{
-    Answer, CONTRACT, Diagnostic, Entry, EntryId, Hash, Kind, Manifest, Output, Position, Produced, Severity, Text, exit,
+    Answer, CONTRACT, Diagnostic, Entry, EntryId, Hash, Kind, Manifest, Output, Position, Produced, Severity, Text, exit, input_hash,
 };
-use sha2::{Digest, Sha256};
 
 const TOOL: &str = concat!("jaldi ", env!("CARGO_PKG_VERSION"));
 
@@ -212,7 +211,7 @@ fn run(manifest: &Manifest) -> Result<Output, String> {
             "js",
             erased.code.as_bytes(),
             erased.map.as_deref(),
-            hash(text.as_bytes()),
+            input_hash(&[text.as_bytes(), header_text.as_bytes()]),
             None,
         )?;
         produced.push(record);
