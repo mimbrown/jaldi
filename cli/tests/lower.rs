@@ -58,11 +58,6 @@ fn manifest(root: &Path, contract: u32, entries: Vec<Entry>) -> Manifest {
         contract,
         root: root.to_path_buf(),
         out_dir: "app/.jaldi".into(),
-        browsers: Browsers {
-            chrome: 150,
-            safari: 26,
-            firefox: 148,
-        },
         source_maps: false,
         entries,
     }
@@ -189,6 +184,11 @@ fn a_sheet_is_lowered_with_its_rules_as_data() {
                 content: "@layer base { :root { --gap: 1rem } .chip { gap: var(--gap); color: rgb(255 0 0 / 50%) } }".into(),
             },
             tokens: vec!["--gap".into()],
+            browsers: Browsers {
+                chrome: 150,
+                safari: 26,
+                firefox: 148,
+            },
         },
     };
     let (status, stdout, stderr) = run(&manifest(ws.path(), CONTRACT, vec![sheet]).to_json());

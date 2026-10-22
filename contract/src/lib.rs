@@ -407,11 +407,6 @@ mod tests {
             contract: CONTRACT,
             root: PathBuf::from("/work/app"),
             out_dir: PathBuf::from("rubico-ats/base/.jaldi"),
-            browsers: Browsers {
-                chrome: 150,
-                safari: 26,
-                firefox: 148,
-            },
             source_maps: false,
             entries: vec![
                 Entry {
@@ -438,6 +433,11 @@ mod tests {
                             content: ":root{--gap:1rem}".into(),
                         },
                         tokens: vec!["--gap".into()],
+                        browsers: Browsers {
+                            chrome: 150,
+                            safari: 26,
+                            firefox: 148,
+                        },
                     },
                 },
             ],
