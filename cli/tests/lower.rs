@@ -139,7 +139,11 @@ fn an_enhancement_is_checked_erased_and_written_beside_its_source() {
     // The record on disk is the one in the answer, and the hashes are the inputs' and outputs'.
     let on_disk = Produced::from_json(&std::fs::read_to_string(out.join("chips.json")).unwrap()).unwrap();
     assert_eq!(&on_disk, record);
-    assert_eq!(record.input_hash.0.len(), 64);
+    assert_eq!(
+        record.input_hash,
+        jaldi_contract::input_hash(&[GOOD.as_bytes(), HEADER.as_bytes()]),
+        "the hash is over the source then the header"
+    );
     assert_ne!(record.input_hash, record.output_hash);
 }
 
@@ -196,6 +200,22 @@ fn a_sheet_is_lowered_with_its_rules_as_data() {
     assert_eq!(facts.rules[1].layer.as_deref(), Some("base"));
     let css = std::fs::read_to_string(ws.path().join("app/.jaldi/sheet.css")).unwrap();
     assert!(css.starts_with("@layer base{"), "{css}");
+}
+
+#[test]
+fn the_contract_invokes_the_tool_by_the_one_convention() {
+    // `JALDI` names the binary; the answer comes back parsed.
+    let ws = workspace(GOOD);
+    // SAFETY: tests in this file do not race on the environment.
+    unsafe { std::env::set_var("JALDI", env!("CARGO_BIN_EXE_jaldi")) };
+    let answer = jaldi_contract::invoke::lower(&manifest(ws.path(), CONTRACT, vec![chips()])).unwrap();
+    assert!(matches!(answer, Answer::Produced(ref out) if out.produced.len() == 1), "{answer:?}");
+    let refused = jaldi_contract::invoke::lower(&manifest(ws.path(), CONTRACT + 1, vec![chips()])).unwrap();
+    assert!(matches!(refused, Answer::Refused { .. }), "{refused:?}");
+    unsafe { std::env::set_var("JALDI", "/nonexistent/jaldi") };
+    let absent = jaldi_contract::invoke::lower(&manifest(ws.path(), CONTRACT, vec![])).unwrap_err();
+    assert!(matches!(absent, jaldi_contract::invoke::Failed::Absent), "{absent:?}");
+    unsafe { std::env::remove_var("JALDI") };
 }
 
 #[test]

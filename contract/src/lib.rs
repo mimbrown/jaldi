@@ -180,8 +180,10 @@ pub struct Output {
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct Produced {
     pub id: EntryId,
-    /// SHA-256 of the input as read, hex. The framework records it beside
-    /// the output to know when the output is behind.
+    /// SHA-256, hex, of everything the lowering read: for an enhancement
+    /// the source then the header, concatenated; for a sheet its text.
+    /// The framework computes the same ([`input_hash`]) to know when the
+    /// output is behind.
     pub input_hash: Hash,
     /// Relative to `Manifest::out_dir`.
     pub output: PathBuf,
@@ -246,6 +248,92 @@ pub struct Position {
 }
 
 // ---------------------------------------------------------------- wire
+
+/// The hash a [`Produced::input_hash`] holds, over the inputs in order:
+/// an enhancement's source then its header; a sheet's text alone.
+pub fn input_hash(inputs: &[&[u8]]) -> Hash {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    for input in inputs {
+        h.update(input);
+    }
+    Hash(format!("{:x}", h.finalize()))
+}
+
+/// Running the tool: the one convention both the framework's macro and
+/// its server use. The binary is `$JALDI` when set (a local build while a
+/// contract change is worked out), else `jaldi` on `PATH`. The manifest
+/// goes in on stdin, the answer comes back on stdout.
+pub mod invoke {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    use super::{Answer, Manifest};
+
+    /// Why there is no answer.
+    #[derive(Debug)]
+    pub enum Failed {
+        /// No `jaldi` on `PATH` and no `JALDI`: the message says how to get it.
+        Absent,
+        /// It ran but its output was not an answer; `BROKEN`, or worse.
+        Broken { status: Option<i32>, stderr: String },
+    }
+
+    impl std::fmt::Display for Failed {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Failed::Absent => write!(
+                    f,
+                    "`jaldi` is not on PATH (and `JALDI` is unset): the frontend tool that checks and lowers \
+                     enhancements. Install the pinned release (https://github.com/mimbrown/jaldi/releases) or \
+                     point `JALDI` at a local build."
+                ),
+                Failed::Broken { status, stderr } => write!(f, "`jaldi` did not answer (status {status:?}): {}", stderr.trim()),
+            }
+        }
+    }
+
+    /// The binary that would run: `$JALDI`, else `jaldi`.
+    pub fn program() -> String {
+        std::env::var("JALDI")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "jaldi".to_string())
+    }
+
+    /// Run `jaldi lower` over the manifest. A refusal is an `Answer`, not
+    /// a failure: the caller names both contracts.
+    pub fn lower(manifest: &Manifest) -> Result<Answer, Failed> {
+        let mut child = match Command::new(program())
+            .args(["lower", "-"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(Failed::Absent),
+            Err(e) => {
+                return Err(Failed::Broken {
+                    status: None,
+                    stderr: e.to_string(),
+                });
+            }
+        };
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(manifest.to_json().as_bytes());
+        }
+        let out = child.wait_with_output().map_err(|e| Failed::Broken {
+            status: None,
+            stderr: e.to_string(),
+        })?;
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        Answer::from_json(&stdout).map_err(|_| Failed::Broken {
+            status: out.status.code(),
+            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        })
+    }
+}
 
 /// The tool's exit statuses, one per outcome a caller tells apart.
 pub mod exit {

@@ -98,7 +98,7 @@ fn read(path: &str) -> std::io::Result<String> {
 }
 
 fn hash(bytes: &[u8]) -> Hash {
-    Hash(format!("{:x}", Sha256::digest(bytes)))
+    input_hash(&[bytes])
 }
 
 /// Everything the run writes and says. An error here is the run itself
@@ -116,7 +116,7 @@ fn run(manifest: &Manifest) -> Result<Output, String> {
     let mut diagnostics = Vec::new();
     let mut produced = Vec::new();
     let mut seen: HashSet<&EntryId> = HashSet::new();
-    let mut enhancements: Vec<(&Entry, PathBuf, PathBuf, String)> = Vec::new();
+    let mut enhancements: Vec<(&Entry, PathBuf, PathBuf, String, String)> = Vec::new();
     let mut sheets: Vec<(&Entry, String, String, &[String])> = Vec::new();
 
     for entry in &manifest.entries {
@@ -143,11 +143,14 @@ fn run(manifest: &Manifest) -> Result<Output, String> {
                         continue;
                     }
                 };
-                if !header_path.is_file() {
-                    diagnostics.push(error(entry, None, format!("the header {} is not a file", header.display())));
-                    continue;
-                }
-                enhancements.push((entry, source_path, header_path, text));
+                let header_text = match std::fs::read_to_string(&header_path) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        diagnostics.push(error(entry, None, format!("cannot read the header {}: {e}", header.display())));
+                        continue;
+                    }
+                };
+                enhancements.push((entry, source_path, header_path, text, header_text));
             }
             Kind::Sheet { source, tokens } => {
                 let (name, text) = match source {
@@ -171,7 +174,7 @@ fn run(manifest: &Manifest) -> Result<Output, String> {
     if !enhancements.is_empty() {
         let checked: Vec<check::Checked> = enhancements
             .iter()
-            .map(|(entry, source, header, _)| check::Checked {
+            .map(|(entry, source, header, _, _)| check::Checked {
                 id: entry.id.clone(),
                 origin: entry.origin.clone(),
                 source: source.clone(),
@@ -188,7 +191,7 @@ fn run(manifest: &Manifest) -> Result<Output, String> {
         }
     }
 
-    for (entry, source_path, _, text) in &enhancements {
+    for (entry, source_path, _, text, header_text) in &enhancements {
         if failed.contains(&entry.id) {
             continue;
         }
