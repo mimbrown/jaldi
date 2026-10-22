@@ -43,9 +43,6 @@ pub struct Manifest {
     /// Where outputs go, relative to `root`. Committed beside the sources
     /// and verified by the framework's gate.
     pub out_dir: PathBuf,
-    /// The browser floor a sheet is lowered to. Demanded: a tool that
-    /// guessed would guess differently from the framework's docs.
-    pub browsers: Browsers,
     /// Whether to write a source map beside each output.
     pub source_maps: bool,
     pub entries: Vec<Entry>,
@@ -132,6 +129,9 @@ pub enum Kind {
         /// read of a property neither here nor declared in the sheet is
         /// a diagnostic.
         tokens: Vec<String>,
+        /// The browser floor the sheet is lowered to. Demanded: a tool
+        /// that guessed would guess differently from the framework's docs.
+        browsers: Browsers,
     },
 }
 

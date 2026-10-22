@@ -116,7 +116,7 @@ fn run(manifest: &Manifest) -> Result<Output, String> {
     let mut produced = Vec::new();
     let mut seen: HashSet<&EntryId> = HashSet::new();
     let mut enhancements: Vec<(&Entry, PathBuf, PathBuf, String, String)> = Vec::new();
-    let mut sheets: Vec<(&Entry, String, String, &[String])> = Vec::new();
+    let mut sheets: Vec<(&Entry, String, String, &[String], jaldi_contract::Browsers)> = Vec::new();
 
     for entry in &manifest.entries {
         if let Some(problem) = entry.id.problem() {
@@ -151,7 +151,7 @@ fn run(manifest: &Manifest) -> Result<Output, String> {
                 };
                 enhancements.push((entry, source_path, header_path, text, header_text));
             }
-            Kind::Sheet { source, tokens } => {
+            Kind::Sheet { source, tokens, browsers } => {
                 let (name, text) = match source {
                     Text::File { path } => match std::fs::read_to_string(root.join(path)) {
                         Ok(t) => (path.display().to_string(), t),
@@ -162,7 +162,7 @@ fn run(manifest: &Manifest) -> Result<Output, String> {
                     },
                     Text::Inline { content } => (format!("{}.css", entry.id), content.clone()),
                 };
-                sheets.push((entry, name, text, tokens));
+                sheets.push((entry, name, text, tokens, *browsers));
             }
         }
     }
@@ -217,8 +217,8 @@ fn run(manifest: &Manifest) -> Result<Output, String> {
         produced.push(record);
     }
 
-    for (entry, name, text, tokens) in &sheets {
-        let lowered = match sheet::lower(text, name, manifest.browsers, tokens, manifest.source_maps) {
+    for (entry, name, text, tokens, browsers) in &sheets {
+        let lowered = match sheet::lower(text, name, *browsers, tokens, manifest.source_maps) {
             Ok(l) => l,
             Err((at, message)) => {
                 diagnostics.push(error(entry, at, message));
