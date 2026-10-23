@@ -40,13 +40,72 @@ pub fn declared(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// Whether a module has a default export (`export default …` or
+/// `export { x as default }`), read off its parse.
+pub fn has_default(text: &str) -> bool {
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, text, SourceType::ts().with_module(true)).parse();
+    parsed
+        .module_record
+        .local_export_entries
+        .iter()
+        .chain(&parsed.module_record.indirect_export_entries)
+        .any(|e| e.export_name.is_default())
+}
+
 /// Every import of `modules[index]` that the output layout would not
 /// resolve, positioned at its specifier.
 pub fn check(root: &Path, modules: &[Module<'_>], index: usize, declared: &HashSet<String>) -> Vec<(Position, String)> {
     let module = &modules[index];
+    let mut problems = Vec::new();
+    for (offset, specifier) in requests(module.text) {
+        if let Some(problem) = problem(root, modules, module, &specifier, declared) {
+            problems.push((position(module.text, offset as usize), problem));
+        }
+    }
+    problems
+}
+
+/// Every import of a bundle's entry that the bundle would not link: the
+/// entry has no directory, so a relative import names a bundled module by
+/// id alone (`./{id}.js`), and a bare one is declared.
+pub fn check_entry(text: &str, ids: &[&EntryId], declared: &HashSet<String>) -> Vec<(Position, String)> {
+    let mut problems = Vec::new();
+    for (offset, specifier) in requests(text) {
+        let relative = specifier.starts_with("./") || specifier.starts_with("../");
+        let problem = if relative {
+            let named = specifier.strip_prefix("./").and_then(|s| s.strip_suffix(".js"));
+            match named {
+                Some(id) if ids.iter().any(|i| i.0 == id) => None,
+                _ => {
+                    let listed: Vec<String> = ids.iter().map(|i| format!("`./{i}.js`")).collect();
+                    Some(format!(
+                        "imports `{specifier}`, which is not a module of this bundle: the entry names a bundled module \
+                         by its id, as `./{{id}}.js` (this bundle's: {})",
+                        if listed.is_empty() { "none".to_string() } else { listed.join(", ") }
+                    ))
+                }
+            }
+        } else if declared.contains(&specifier) {
+            None
+        } else {
+            Some(format!(
+                "imports `{specifier}`, which no declarations entry of the manifest declares (`declare module \"{specifier}\"`)"
+            ))
+        };
+        if let Some(problem) = problem {
+            problems.push((position(text, offset as usize), problem));
+        }
+    }
+    problems
+}
+
+/// Every specifier a module requests, statically or by a literal
+/// `import()`, in source order, at its offset. Empty when it does not
+/// parse: a parse error is the checker's (and erasure's) to report.
+fn requests(text: &str) -> Vec<(u32, String)> {
     let allocator = Allocator::default();
-    let parsed = Parser::new(&allocator, module.text, SourceType::ts().with_module(true)).parse();
-    // A parse error is the checker's (and erasure's) to report.
+    let parsed = Parser::new(&allocator, text, SourceType::ts().with_module(true)).parse();
     if !parsed.diagnostics.is_empty() {
         return Vec::new();
     }
@@ -58,20 +117,13 @@ pub fn check(root: &Path, modules: &[Module<'_>], index: usize, declared: &HashS
     }
     for dynamic in &parsed.module_record.dynamic_imports {
         let span = dynamic.module_request;
-        let written = &module.text[span.start as usize..span.end as usize];
+        let written = &text[span.start as usize..span.end as usize];
         if let Some(literal) = string_literal(written) {
             requests.push((span.start, literal));
         }
     }
     requests.sort();
-
-    let mut problems = Vec::new();
-    for (offset, specifier) in requests {
-        if let Some(problem) = problem(root, modules, module, &specifier, declared) {
-            problems.push((position(module.text, offset as usize), problem));
-        }
-    }
-    problems
+    requests
 }
 
 fn problem(root: &Path, modules: &[Module<'_>], module: &Module<'_>, specifier: &str, declared: &HashSet<String>) -> Option<String> {

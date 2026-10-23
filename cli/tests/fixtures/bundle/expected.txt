@@ -1,0 +1,11 @@
+SIDE_EFFECT_A
+SIDE_EFFECT_B
+SIDE_EFFECT_EFFECTS true
+entry a:a b:b:helper C!
+live binding 2
+collision 1 d-known
+namespace f,known
+re-export a:r
+cycle cycle:half:other
+shadow nested:x a:y
+meta object

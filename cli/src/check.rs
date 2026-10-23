@@ -19,6 +19,7 @@ use tsrs_diagnostics::Category;
 use tsrs_execute::tsc::System;
 use tsrs_vfs::{FS, bundled, osvfs};
 
+#[derive(Clone)]
 pub struct Checked {
     pub id: EntryId,
     pub origin: Origin,
@@ -27,6 +28,20 @@ pub struct Checked {
     /// Absolute. An enhancement's header, which a probe pins its default
     /// export to; `None` for a module or a declaration file.
     pub header: Option<PathBuf>,
+}
+
+/// A bundle's part of the program: its entry, written into the check's
+/// directory beside one stub per module (`{id}.ts`, re-exporting the
+/// module's source) so the entry's `./{id}.js` resolves as the linker
+/// resolves it, and its modules, checked where they are, reached or not.
+pub struct Bundle {
+    pub id: EntryId,
+    pub origin: Origin,
+    pub entry: String,
+    /// The module's id, its absolute source, its source as the manifest
+    /// names it, and whether it has a default export (the stub
+    /// re-exports it by name).
+    pub modules: Vec<(EntryId, PathBuf, String, bool)>,
 }
 
 /// The compiler options every enhancement is checked under. Fixed here,
@@ -43,22 +58,63 @@ const OPTIONS: &str = r#"{
     "erasableSyntaxOnly": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
+    "moduleDetection": "force",
     "skipLibCheck": true
   }"#;
 
-pub fn run(entries: &[Checked]) -> Vec<Diagnostic> {
+pub fn run(entries: &[Checked], bundles: &[Bundle]) -> Vec<Diagnostic> {
     let dir = std::env::temp_dir().join(format!("jaldi-check-{}", std::process::id()));
-    let result = run_in(&dir, entries);
+    let result = run_in(&dir, entries, bundles);
     let _ = std::fs::remove_dir_all(&dir);
     result
 }
 
-fn run_in(dir: &Path, entries: &[Checked]) -> Vec<Diagnostic> {
+fn run_in(dir: &Path, entries: &[Checked], bundles: &[Bundle]) -> Vec<Diagnostic> {
     if let Err(e) = std::fs::create_dir_all(dir) {
         return vec![run_problem(format!("cannot create {}: {e}", dir.display()))];
     }
+    // A bundle's entry is checked from the check's own directory, and its
+    // modules where they are, named in a diagnostic's message.
+    let mut owned: Vec<Checked> = entries.iter().map(Checked::clone).collect();
+    let mut named: Vec<(String, String, EntryId, Origin)> = Vec::new();
+    for bundle in bundles {
+        let at = dir.join(format!("bundle-{}", bundle.id));
+        if let Err(e) = std::fs::create_dir_all(&at) {
+            return vec![run_problem(format!("cannot create {}: {e}", at.display()))];
+        }
+        for (id, source, relative, default) in &bundle.modules {
+            let target = serde_json::to_string(&source.with_extension("js").to_string_lossy()).expect("a path serializes");
+            let mut stub = format!("export * from {target};\n");
+            if *default {
+                stub.push_str(&format!("export {{ default }} from {target};\n"));
+            }
+            if let Err(e) = std::fs::write(at.join(format!("{id}.ts")), stub) {
+                return vec![run_problem(format!("cannot write a stub for {id}: {e}"))];
+            }
+            named.push((
+                normalize(&source.to_string_lossy()),
+                relative.clone(),
+                bundle.id.clone(),
+                bundle.origin.clone(),
+            ));
+        }
+        let entry = at.join("entry.ts");
+        if let Err(e) = std::fs::write(&entry, &bundle.entry) {
+            return vec![run_problem(format!("cannot write {}: {e}", entry.display()))];
+        }
+        owned.push(Checked {
+            id: bundle.id.clone(),
+            origin: bundle.origin.clone(),
+            source: entry,
+            header: None,
+        });
+    }
+    let entries = &owned[..];
     let mut files: Vec<String> = Vec::new();
     let mut probes: Vec<(String, &Checked)> = Vec::new();
+    for (source, _, _, _) in &named {
+        files.push(source.clone());
+    }
     for entry in entries {
         files.push(entry.source.to_string_lossy().into_owned());
         let Some(header) = &entry.header else { continue };
@@ -107,7 +163,7 @@ fn run_in(dir: &Path, entries: &[Checked]) -> Vec<Diagnostic> {
 
     let mut out = Vec::new();
     for d in sink.lock().unwrap_or_else(|e| e.into_inner()).iter() {
-        out.push(translate(d, entries, &probes));
+        out.push(translate(d, entries, &probes, &named));
     }
     let printed = String::from_utf8_lossy(&text.lock().unwrap_or_else(|e| e.into_inner()))
         .trim()
@@ -143,7 +199,12 @@ fn normalize(path: &str) -> String {
 /// A tsrs diagnostic as the contract's: attributed to the entry whose
 /// source, header or probe it is in, positioned in the source when it is
 /// there, and otherwise naming the file in the message.
-fn translate(d: &TsDiagnostic, entries: &[Checked], probes: &[(String, &Checked)]) -> Diagnostic {
+fn translate(
+    d: &TsDiagnostic,
+    entries: &[Checked],
+    probes: &[(String, &Checked)],
+    named: &[(String, String, EntryId, Origin)],
+) -> Diagnostic {
     let severity = match d.category() {
         Category::Error => Severity::Error,
         _ => Severity::Warning,
@@ -191,6 +252,16 @@ fn translate(d: &TsDiagnostic, entries: &[Checked], probes: &[(String, &Checked)
             message,
             at: None,
             origin: Some(entry.origin.clone()),
+        };
+    }
+    if let Some((_, source, id, origin)) = named.iter().find(|(p, _, _, _)| *p == file_name) {
+        let where_ = at.map(|p| format!(":{}:{}", p.line, p.column)).unwrap_or_default();
+        return Diagnostic {
+            entry: Some(id.clone()),
+            severity,
+            message: format!("in the bundled module {source}{where_}: {message}"),
+            at: None,
+            origin: Some(origin.clone()),
         };
     }
     if let Some((_, entry)) = probes.iter().find(|(p, _)| *p == file_name) {

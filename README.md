@@ -33,7 +33,7 @@ a `[patch]` and the binary at a local build with an environment variable.
 ## What it writes
 
 Into the manifest's `out_dir`, named by each entry's id (one path
-segment): `{id}.js` for an enhancement or a module, `{id}.css` for a
+segment): `{id}.js` for an enhancement, a module or a bundle, `{id}.css` for a
 sheet, the same with `.map` when source maps are asked for, and
 `{id}.json` holding the entry's `Produced` record with the input's hash.
 A declarations entry writes nothing. The framework commits all of it
@@ -56,6 +56,19 @@ beside the sources and reads nothing else.
 - **declarations** (contract 3): a `.d.ts` of `declare module "…"` blocks
   typing a module served as built (a vendored bundle) that a module
   imports by a bare specifier. Checked, never written.
+- **bundle** (contract 4): one script linked from an entry the framework
+  generates (inline, from its registries) over the modules it may reach,
+  each listed with its id and source. The entry and the modules are
+  checked with the rest of the manifest under the module rules (the
+  entry names a module by id, `./{id}.js`), erased, linked with ESM's
+  evaluation order and live bindings, and minified as one module: a
+  module the entry does not reach is left out, and a top-level binding
+  nothing reads is dropped, while every statement that may have an
+  effect stays. Bare specifiers stay imports. `export *` and a literal
+  `import()` of a bundled module are refused with a diagnostic. The
+  record says which modules went in and which bare specifiers the output
+  still imports; the source map, when asked, points into the
+  TypeScript sources.
 - **sheet**: a stylesheet, lowered and minified, its rules back as data.
 
 ## Use
